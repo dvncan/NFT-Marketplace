@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity >=0.8.19;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-// import "@openzeppelin/contracts-upgradeable/contracts/utils/PausableUpgradeable.sol";
-// import "@openzeppelin/contracts-upgradeable/contracts/access/AccessControlUpgradeable.sol";
-// import "@openzeppelin/contracts-upgradeable/contracts/proxy/utils/Initializable.sol";
-// import "@openzeppelin/contracts-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
-import {SafeERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
-
-contract GenericMarketplace is ReentrancyGuard {
+import {SafeERC20} from "../../lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import "../../lib/openzeppelin-contracts/contracts/token/ERC721/utils/ERC721Holder.sol";
+contract GenericMarketplace is ReentrancyGuard, ERC721Holder {
     using SafeERC20 for IERC20;
     enum Status {
         INACTIVE,
@@ -24,17 +20,14 @@ contract GenericMarketplace is ReentrancyGuard {
         native
     }
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Only owner can call this function");
-        _;
-    }
-
     struct tokenIds {
         uint256[] ids;
         mapping(uint256 => bool) holding;
         mapping(uint256 => bool) transferred;
-        uint32 index;
+        uint256 index;
     }
+    event debug(Type tokenType);
+    event debug2(uint);
 
     struct AcceptedTokens {
         address owner;
@@ -45,12 +38,13 @@ contract GenericMarketplace is ReentrancyGuard {
         string tokenName;
         uint256 totalSupply;
     }
-    address public owner;
 
     mapping(address => Status) public tokenStatus;
     mapping(address => AcceptedTokens) private tokens;
     mapping(Type => function(address, uint256) internal)
-        public purchaseTokenFunctions;
+        private purchaseTokenFunctions;
+    mapping(Type => function(address, address, uint256) internal)
+        private paymentFunctions;
 
     error TokenAlreadyExists();
     error InvalidTokenType();
@@ -58,7 +52,7 @@ contract GenericMarketplace is ReentrancyGuard {
     error PaymentInvalid();
     error InsufficientBalance();
     error TokenNotForSale();
-    error TokenDoesNotExist();
+    error TokenNotAccepted();
     error TokenIDInvalid();
     error TokenNotOwnedBySender();
     error TokenOwnedByContract();
@@ -76,11 +70,13 @@ contract GenericMarketplace is ReentrancyGuard {
     );
 
     constructor() {
-        owner = msg.sender;
-        purchaseTokenFunctions[Type.ERC721] = this.tokenERC721;
-        purchaseTokenFunctions[Type.ERC1155] = this.tokenERC1155;
-        purchaseTokenFunctions[Type.ERC20] = this.tokenERC20;
-        purchaseTokenFunctions[Type.native] = this.tokenNative;
+        // owner = msg.sender;
+        purchaseTokenFunctions[Type.ERC721] = tokenERC721;
+        purchaseTokenFunctions[Type.ERC1155] = tokenERC1155;
+        purchaseTokenFunctions[Type.ERC20] = tokenERC20;
+        purchaseTokenFunctions[Type.native] = tokenNative;
+        // paymentFunctions[Type.native] = this.paymentNative;
+        // paymentFunctions[Type.ERC20] = this.paymentERC20;
     }
 
     function addTokenToMarket(
@@ -90,25 +86,19 @@ contract GenericMarketplace is ReentrancyGuard {
         uint256 _totalSupply,
         uint256[] calldata _tokenIds,
         uint256 numberOfTokens
-    ) public onlyOwner {
+    ) external {
         if (tokens[_contractAddress].status == Status.ACTIVE)
             revert TokenAlreadyExists();
-        if (
-            _tokenType != Type.ERC721 ||
-            _tokenType != Type.ERC1155 ||
-            _tokenType != Type.ERC20 ||
-            _tokenType != Type.native
-        ) revert InvalidTokenType();
-        if (_totalSupply < 1) revert TotalSupplyMustBeGreaterThanZero();
         require(
             _tokenType == Type.ERC721 ||
                 _tokenType == Type.ERC1155 ||
                 _tokenType == Type.ERC20 ||
                 _tokenType == Type.native,
-            "Invalid token type"
+            "InvalidTokenType"
         );
+        if (_totalSupply < 1) revert TotalSupplyMustBeGreaterThanZero();
+        AcceptedTokens storage local = tokens[_contractAddress];
         if (tokenStatus[_contractAddress] == Status.INACTIVE) {
-            AcceptedTokens storage local = tokens[_contractAddress];
             local.owner = msg.sender;
             local.contractAddress = _contractAddress;
             local.status = Status.ACTIVE;
@@ -117,7 +107,7 @@ contract GenericMarketplace is ReentrancyGuard {
             local.totalSupply = _totalSupply;
             tokenStatus[_contractAddress] == Status.ACTIVE;
         }
-        // local.ids.ids = _tokenIds;
+        local.ids.ids = _tokenIds;
 
         if (_tokenType == Type.ERC721 || _tokenType == Type.ERC1155) {
             if (_tokenIds.length < 1) revert TokenIDInvalid();
@@ -127,6 +117,7 @@ contract GenericMarketplace is ReentrancyGuard {
                 local.ids.ids.push(_tokenIds[i]);
                 local.ids.holding[_tokenIds[i]] = true;
                 local.ids.index++;
+                emit debug(_tokenType);
             }
         } else if (_tokenType == Type.ERC20 || _tokenType == Type.native) {
             local.ids.index = numberOfTokens;
@@ -134,19 +125,14 @@ contract GenericMarketplace is ReentrancyGuard {
         purchaseTokenFunctions[_tokenType](_contractAddress, numberOfTokens);
     }
 
-    fucntion userPlace
-
     function tokenERC721(
         address contractAddress,
         uint256 numberOfTokens
     ) internal {
         IERC721 nft = IERC721(contractAddress);
         if (nft.balanceOf(msg.sender) < 1) revert InsufficientBalance();
-        for (
-            uint256 j = tokens[contractAddress].ids.index - numberOfTokens - 1;
-            j > tokens[contractAddress].ids.index;
-            j++
-        ) {
+        for (uint256 j = 0; j < tokens[contractAddress].ids.index; j++) {
+            emit debug2(j);
             if (tokens[contractAddress].ids.holding[j])
                 revert TokenNotOwnedBySender();
             nft.safeTransferFrom(
@@ -154,7 +140,7 @@ contract GenericMarketplace is ReentrancyGuard {
                 address(this),
                 tokens[contractAddress].ids.ids[j],
                 ""
-            );
+            ); // the contract is non custodian so transferring nfts is not necessary i think
         }
         emit CollectionNowAccepted(
             tokens[contractAddress].contractAddress,
@@ -194,4 +180,20 @@ contract GenericMarketplace is ReentrancyGuard {
             tokens[contractAddress].totalSupply
         );
     }
+
+    // function takePayment(address paymentToken, address to, uint256 amountOfTokens) external {
+    //     //is the amount > 0
+    //     //check token status
+    //     paymentFunctions[]
+    // }
+
+    // function paymentNative(address paymentToken, address to,  uint256 amountOfTokens) internal{
+
+    // }
+
+    // function paymentERC20(address paymentToken, address to, uint256 amountOfTokens) internal{
+    //     IERC20(paymentToken).transferFrom(msg.sender, to, amountOfTokens);
+
+    // }
 }
+// todo add payments function

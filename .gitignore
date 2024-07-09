@@ -7,8 +7,15 @@ out/
 /broadcast/*/31337/
 /broadcast/**/dry-run/
 
+lib/
+notes/
+
 # Docs
 docs/
 
 # Dotenv file
 .env
+
+.DS_Store
+
+./old-work
